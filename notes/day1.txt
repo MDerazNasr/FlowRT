@@ -1,0 +1,65 @@
+Day 1 Goal
+
+Before writing the persistent kernel, you must understand the GPU hardware it lives on.
+
+Today we will:
+  - set up your cloud gpu development environment
+  - learn the gpu memory hierarchy from first principles
+  - write your first CUDA kernel 
+  - Compile and run it
+  - Understand what to profile and why
+
+Part 1  - Concept - The GPU Memory Hierarchy
+
+This is the single most important mental model for this entire project. Everything  FlowRT does exploits this hierarchy.
+
+THE CPU MENTAL MODEL YOU ALREADY HAVE:
+On a CPU you have RAM  (slow, large) and cache (fast, small). The CPU automatically pulls data from RAM into cache when it needs it. When the cache is full, old data gets evicted.
+
+THE GPU IS THE SAME IDEA, BUT MORE EXTREME
+
+A modern GPU (RTX 4090) has these memory levels, from fastest to slowest:
+
+  Registers          ~256KB per SM    ~1 cycle latency    private to each thread
+  Shared Memory      ~100KB per SM    ~5 cycle latency    shared within a thread
+   block
+  L1 Cache           ~128KB per SM    ~28 cycle latency   automatic, per-SM
+  L2 Cache           ~72MB total      ~193 cycle latency  shared across all SMs
+  Global Memory      ~24GB            ~600 cycle latency  your VRAM (the big
+  number)
+  (DRAM)
+
+
+The RTX 4090 has 128 Streaming Multiprocessors (SMs). Each SM runs many threads in parallel. All SMs share the L2 cache. Global memory is the 24GB you see on the spec sheet.
+
+WHY THIS MATTER FOR FLOWRT SPECIFICALLY
+
+When you run a standard flow matching inference loop:
+  for t in range(50):
+      v = model(x, t)      # GPU kernel launched
+      x = x + v * dt       # x written to global memory (24GB DRAM)
+                           # kernel exits, L2 cache may be evicted
+  # next iteration: x is read back from global memory into L2
+
+
+Every step, x (the current noisy trajectory state) gets written to global memory and read back. The round trip latency is ~600 cycles. The L2 cache (72MB) can hold it, but other operations during the model forward pass compete for L2 space and may evict x.
+
+The persistent kernel fix: x stays in L2 (or even shared memory for small enough tensors) for all 50 steps. You never never touch global memory until you're done with the full trajectory. That's the difference between ~40% L2 hit rate and >85%.
+
+The Arithmetic Intensity insight
+
+Every GPU operation can characterized by its arithmetic intensity: how many floating point operations (FLOPs) you do per byte of memeory read/write
+
+Arithmetic Intensity - FLOPs / Bytes moved
+
+-- Memory-bound kernels: intensity is low - you spend most time waiting for data
+-- Compute-bound kernels: intensity high -- you spend most time doing math
+
+Matrix multiply (GEMM) has arithmetic intensity: for an NxN matmul, you do O(N^3) FLOPs but only move O(N^2) bytes.
+
+This is why it's the
+  operation that GPUs are built for.
+
+  LayerNorm has low arithmetic intensity: lots of memory movement, not much
+   math. This is why fusing it with the following linear layer matters —
+  you avoid the extra memory round trip.
