@@ -63,3 +63,66 @@ This is why it's the
   LayerNorm has low arithmetic intensity: lots of memory movement, not much
    math. This is why fusing it with the following linear layer matters —
   you avoid the extra memory round trip.
+
+ Part 2: Environment Setup
+
+  Step 1 — Get a cloud GPU
+
+  I recommend RunPod (runpod.io). It's the cheapest option for RTX 4090 access, good for students.
+
+  1. Create account, add $20 credit
+  2. Go to "Pods" → "Deploy" → filter for RTX 4090
+  3. Select template: RunPod PyTorch 2.x (comes with CUDA 12, nvcc, everything pre-installed)
+  4. Choose "On-Demand" (not spot, more reliable while learning)
+  5. Deploy. You'll get an SSH connection string.
+
+  Alternatives if 4090 isn't available:
+  - RTX 3090 (Sm86, Ada Lovelace predecessor — fine for learning, slightly different perf)
+  - A100 (Sm80, datacenter GPU — excellent, more expensive)
+  - Google Colab Pro (free tier has T4 — works for learning but awkward for C++ dev)
+
+  Step 2 — Local setup on Mac
+
+  # Install VS Code if you don't have it
+  brew install --cask visual-studio-code
+
+  # Install the Remote-SSH extension in VS Code
+  # Extensions panel → search "Remote - SSH" → install
+
+  Step 3 — Connect VS Code to your cloud GPU
+
+  Cmd+Shift+P → "Remote-SSH: Connect to Host"
+  → enter your RunPod SSH string
+  → VS Code is now running on the remote GPU machine
+
+  From here, every file you edit in VS Code, every terminal command, runs on the GPU machine. Your Mac is just a screen.
+
+  Step 4 — Verify CUDA is working
+
+  Once connected, open a terminal in VS Code and run:
+
+  nvidia-smi           # should show your GPU
+  nvcc --version       # should show CUDA 12.x
+  python3 -c "import torch; print(torch.cuda.is_available())"  # should print True
+
+  ---
+  Part 3: Your First CUDA Kernel — Naive GEMM
+
+  We're writing a matrix multiply. This is not the final project code — it's how you learn to think about GPU programming. Every
+  complex kernel in FlowRT is built on this foundation.
+
+  What is GEMM?
+
+  GEMM = General Matrix Multiplication. C = A × B where A is (M×K), B is (K×N), C is (M×N).
+
+  For each element C[i][j]:
+  C[i][j] = sum over k of A[i][k] * B[k][j]
+
+  On a CPU, you write three nested for loops. On a GPU, each thread computes one output element in parallel.
+
+  Create this file structure
+
+  flowrt/
+  └── day01/
+      ├── naive_gemm.cu
+      └── CMakeLists.txt
