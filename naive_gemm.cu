@@ -171,6 +171,11 @@ int main() {
 
   int REPS = 10;
   auto t0 = std::chrono::high_resolution_clock::now();
+  for (int r = 0; r < REPS; r++) {
+    naive_gemm_kernel<<<grid, block>>>(d_A, d_B, d_C, M, K, N);
+  }
+  cudaDeviceSynchronize();
+  auto t1 = std::chrono::high_resolution_clock::now();
 
   double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / REPS;
   double gflops = 2.0 * M * K * N / (ms * 1e6);
