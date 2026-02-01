@@ -209,11 +209,24 @@
 //  %.4f%% — print with 4 decimal places. %% prints a literal % sign
 //           (a single % would be interpreted as a format specifier).
 //
-//  WHAT TO EXPECT from this naive kernel:
-//    Naive GEMM typically achieves 1-3% utilisation on an RTX 4090.
-//    That sounds terrible — and it is. But that's the point.
-//    This baseline number is what you're trying to improve.
-//    A tiled shared-memory GEMM gets to ~60-70%.
+//  MEASURED RESULT (RTX 4090, M=K=N=1024, 10 reps):
+//    Naive GEMM:  0.43 ms  |  4986.4 GFLOP/s
+//    RTX 4090 peak FP32: ~82500 GFLOP/s
+//    Utilization: 6.04%
+//    Max absolute error: 9.16e-05  [PASS]
+//
+//  WHAT THIS MEANS:
+//    6% utilization — the GPU has 82,500 GFLOP/s available and we're using
+//    ~4,986. Every thread is bottlenecked on global memory reads with no
+//    data reuse. The GPU's compute cores are mostly sitting idle waiting
+//    for data to arrive.
+//
+//    9.16e-05 error — well under the 1e-3 threshold. The kernel is correct.
+//    Floating-point rounding across 1024 accumulations produces ~0.0001
+//    difference vs the CPU reference. Expected and fine.
+//
+//  WHAT COMES NEXT (for context):
+//    A tiled shared-memory GEMM gets to ~60-70% utilization.
 //    cuBLAS (NVIDIA's tuned library) gets to ~85-90%.
 //    FlowRT's persistent kernel targets beating cuBLAS on the specific
 //    pattern of flow matching's repeated steps.

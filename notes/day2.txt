@@ -1,0 +1,91 @@
+  ---
+  Day 2 — Roadmap Position
+
+  Milestone 1, Step 2. You have the hardware mental
+  model. Now we meet the actual model we are
+  optimizing — Diffusion Policy. Today we export it to
+   ONNX, measure its baseline latency, and use Nsight
+  Systems to find the top 3 bottlenecks. This is the
+  profiling foundation that justifies every
+  optimization we build in Days 3 through 7.
+
+  ---
+  1. The Concept in Plain Language
+
+  Before you optimize anything, you measure it. This
+  sounds obvious but most people skip it — they guess
+  where the bottleneck is and optimize the wrong
+  thing. The FlowRT spec is explicit about this: every
+   kernel exists to serve a specific measured
+  bottleneck, not as a demonstration of skill.
+
+  Today we are doing three things:
+
+  1. Export Diffusion Policy from PyTorch to ONNX
+  format
+  2. Run a baseline inference loop and measure latency
+  3. Profile it with Nsight Systems to see exactly
+  where time is being spent
+
+  ---
+  2. The ML Theory Connection
+
+  What is Diffusion Policy?
+
+  Diffusion Policy is a robot learning architecture
+  from Chi et al. 2023. A robot arm watches a human
+  perform a task — pick up a cup, open a drawer — and
+  learns to imitate it. The policy takes in sensor
+  observations (camera images, joint positions) and
+  outputs a sequence of actions for the robot to
+  execute.
+
+  The reason it uses flow matching instead of a
+  simpler regression model is that robot actions are
+  multimodal. Given the same scene, a human might
+  reach for a cup from the left or from the right —
+  both are valid. A standard regression model averages
+   them and outputs a path straight through the cup.
+  Flow matching can represent the full distribution of
+   valid behaviors and sample coherently from it.
+
+  The architecture is a transformer with time
+  conditioning — at every layer, the current timestep
+  t is injected so the model knows how far along the
+  denoising trajectory it is. This is the
+  architectural detail that motivates our fused
+  LayerNorm+Linear+time injection kernel on Day 4.
+
+  What is ONNX?
+
+  ONNX (Open Neural Network Exchange) is a standard
+  file format for neural networks. You train in
+  PyTorch, export to ONNX, and then any runtime (ONNX
+  Runtime, TensorRT, FlowRT) can load and run it
+  without needing PyTorch. It captures the model as a
+  computation graph — nodes are operations, edges are
+  tensors.
+
+  This is how FlowRT stays model-agnostic. It does not
+   care that you trained in PyTorch. It loads the ONNX
+   graph and runs it.
+
+  ---
+  3. The FlowRT Connection
+
+  The baseline we measure today is the number
+  everything else is compared against. When we say the
+   persistent kernel gives a 5x speedup, that is 5x
+  over this number. When we say speculative flow
+  matching gives 10x, that is 10x over this number.
+
+  If we do not measure carefully now, our speedup
+  claims mean nothing.
+
+  ---
+  4. Implementation
+
+  On your pod, first install the dependencies:
+
+  pip install diffusers huggingface_hub onnx
+  onnxruntime-gpu
