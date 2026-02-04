@@ -85,37 +85,38 @@ class DiffusionPolicyNet(nn.Module):
   n_layers=8 means 8 blocks. Each forward pass runs
   all 8. The full inference loop runs this 50 times.
   That is 400 block executions per sample.
-''''
+'''
 
-#Export to onnx and validate
+# Export to onnx and validate
+
 
 def export_to_onnx(model, obs_dim=20, action_dim=10, path="diffusion_policy.onnx"):
     model.eval()
     device = torch.device("cuda")
     model = model.to(device)
 
-
-    #represenattive inputs: batch=1, one observation, one noisy action, one timestep
+    # represenattive inputs: batch=1, one observation, one noisy action, one timestep
     x_dummy = torch.randn(1, obs_dim + action_dim, device=device)
-          t_dummy = torch.zeros(1, device=device)
+    t_dummy = torch.zeros(1, device=device)
 
-      torch.onnx.export(
-          model,
-          (x_dummy, t_dummy),
-          path,
-          input_names=["x", "t"],
-          output_names=["velocity"],
-          dynamic_axes={"x": {0: "batch"}, "t": {0:"batch"}, "velocity": {0: "batch"}},
-          opset_version=17,
-      )
+    torch.onnx.export(
+        model,
+        (x_dummy, t_dummy),
+        path,
+        input_names=["x", "t"],
+        output_names=["velocity"],
+        dynamic_axes={"x": {0: "batch"}, "t": {
+            0: "batch"}, "velocity": {0: "batch"}},
+        opset_version=17,
+    )
 
-      # validate the graph is well-formed
-      onnx_model = onnx.load(path)
-      onnx.checker.check_model(onnx_model)
-      print(f"ONNX export validated: {path}")
-      print(f"Graph inputs:{[n.name for n in onnx_model.graph.input]}")
-      print(f"Graph outputs:{[n.name for n in onnx_model.graph.output]}")
-      print(f"Graph nodes:{len(onnx_model.graph.node)}")
+    # validate the graph is well-formed
+    onnx_model = onnx.load(path)
+    onnx.checker.check_model(onnx_model)
+    print(f"ONNX export validated: {path}")
+    print(f"Graph inputs:{[n.name for n in onnx_model.graph.input]}")
+    print(f"Graph outputs:{[n.name for n in onnx_model.graph.output]}")
+    print(f"Graph nodes:{len(onnx_model.graph.node)}")
 
     '''
  dynamic_axes tells the exporter that the batch
@@ -131,9 +132,11 @@ def export_to_onnx(model, obs_dim=20, action_dim=10, path="diffusion_policy.onnx
   number of graph nodes it prints will be larger than
   8 — ONNX breaks each PyTorch operation into
   primitive ops.
-    ''''
+    '''
 
-#baseline inference loop and latency measurement
+# baseline inference loop and latency measurement
+
+
 def measure_baseline(model, obs_dim=20, action_dim=10, n_steps=50, n_runs=20):
     device = torch.device("cuda")
     model = model.to(device).eval()
@@ -141,17 +144,17 @@ def measure_baseline(model, obs_dim=20, action_dim=10, n_steps=50, n_runs=20):
     x = torch.randn(1, obs_dim + action_dim)
     timesteps = torch.linspace(0, 1, n_steps, device=device)
 
-    #warm up
+    # warm up
     with torch.no_grad():
         for t in timesteps:
             v = model(x, t.unsqueeze(0))
             x = x + v * (1.0 / n_steps)
-    
-    #timed runs
+
+    # timed runs
     latencies = []
     for _ in range(n_runs):
         x = torch.randn(1, obs_dim + action_dim, device=device)
-        #same reason we use cudaDeviceSynchronize()
+        # same reason we use cudaDeviceSynchronize()
         # GPU launches are asynchronous
         # if you dont synchronize before and after
         # you would be measuring CPU scheduling time not GPU execution time
@@ -166,27 +169,28 @@ def measure_baseline(model, obs_dim=20, action_dim=10, n_steps=50, n_runs=20):
                 x = x + v * (1.0 / n_steps)
 
         torch.cuda.synchronize()
-        #per_counter gives nanosecond resolution on linux
-        #use over time.time() for precision
+        # per_counter gives nanosecond resolution on linux
+        # use over time.time() for precision
         t1 = time.perf_counter()
         latencies.append((t1 - t0) * 1000)
 
     latencies = np.array(latencies)
-    
+
     print(f"\nBaseline PyTorch inference (50 steps,Euler)")
     print(f"Mean:{latencies.mean():.2f} ms")
     print(f"Std:{latencies.std():.2f} ms")
     print(f"Min:{latencies.min():.2f} ms")
     print(f"Max:{latencies.max():.2f} ms")
     print(f"Target: <10ms for 100Hz robot control")
-    #we run 20 repetetions
-    #we report mean, std, min, max
-    #variance tells you whether GPU is thermal throttling or being interupted by other processes
-    #high std relatibe to mean is warning that measurements are noisy
+    # we run 20 repetetions
+    # we report mean, std, min, max
+    # variance tells you whether GPU is thermal throttling or being interupted by other processes
+    # high std relatibe to mean is warning that measurements are noisy
+
 
 if __name__ == "__main__":
     model = DiffusionPolicyNet(
-        obs_dim =20,
+        obs_dim=20,
         action_dim=10,
         hidden_dim=256,
         n_layers=8
@@ -197,5 +201,3 @@ if __name__ == "__main__":
 
     print("\nMeasuring baseline latency...")
     measure_baseline(model)
-
-    
