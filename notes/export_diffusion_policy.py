@@ -22,7 +22,7 @@ Real weights are large and require huggingface login
 
 
 class TimeEmbedding(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, dim):
         super().__init__()
         #   A fully connected layer. Stores a weight matrix W
         # and bias b. When called: output = input @ W.T + b.
