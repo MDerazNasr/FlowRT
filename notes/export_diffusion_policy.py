@@ -197,7 +197,7 @@ if __name__ == "__main__":
     )
 
     print("Exporting to ONNX...")
-    export_to_onnx()
+    export_to_onnx(model)
 
     print("\nMeasuring baseline latency...")
     measure_baseline(model)
