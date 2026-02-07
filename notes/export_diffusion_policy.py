@@ -194,7 +194,7 @@ if __name__ == "__main__":
         action_dim=10,
         hidden_dim=256,
         n_layers=8
-    )
+    ).cuda()
 
     print("Exporting to ONNX...")
     export_to_onnx(model)
