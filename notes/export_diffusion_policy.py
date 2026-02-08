@@ -141,7 +141,7 @@ def measure_baseline(model, obs_dim=20, action_dim=10, n_steps=50, n_runs=20):
     device = torch.device("cuda")
     model = model.to(device).eval()
 
-    x = torch.randn(1, obs_dim + action_dim)
+    x = torch.randn(1, obs_dim + action_dim, device=device)
     timesteps = torch.linspace(0, 1, n_steps, device=device)
 
     # warm up
@@ -161,7 +161,7 @@ def measure_baseline(model, obs_dim=20, action_dim=10, n_steps=50, n_runs=20):
         #
         #
         torch.cuda.synchronize()
-        t0 = tine.perf_counter()
+        t0 = time.perf_counter()
 
         with torch.no_grad():
             for t in timesteps:
