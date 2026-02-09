@@ -166,7 +166,7 @@ def measure_baseline(model, obs_dim=20, action_dim=10, n_steps=50, n_runs=20):
         with torch.no_grad():
             for t in timesteps:
                 v = model(x, t.unsqueeze(0))
-                x = x + v * (1.0 / n_steps)
+                x[:, obs_dim:] = x[:, obs_dim:] + v * (1.0 / n_steps)
 
         torch.cuda.synchronize()
         # per_counter gives nanosecond resolution on linux
