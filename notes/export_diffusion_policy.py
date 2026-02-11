@@ -5,6 +5,7 @@ import onnx  # lib that lets us inspect/validate ONNX graph files after export
 import onnxruntime as ort
 import numpy as np
 import time
+from torch.profiler import profile, record_function, ProfilerActivity
 
 
 '''
@@ -186,6 +187,33 @@ def measure_baseline(model, obs_dim=20, action_dim=10, n_steps=50, n_runs=20):
     # we report mean, std, min, max
     # variance tells you whether GPU is thermal throttling or being interupted by other processes
     # high std relatibe to mean is warning that measurements are noisy
+    #
+
+# Fuction to profile missing dependencies on gpu
+
+
+def profile_inference(model, obs_dim=20, action_dim=10, n_steps=50):
+    device = torch.device("cuda")
+    model = model.to(device).eval()
+
+    x = torch.randn(1, obs_dim + action_dim, device=device)
+    timesteps = torch.linspace(0, 1, n_steps, device=device)
+
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        record_shapes=True,
+        with_stack=False
+    ) as prof:
+        with torch.no_grad():
+            for t in timesteps:
+                with record_function(f"step"):
+                    v = model(x, t.unsqueeze(0))
+                    x[:, obs_dim:] = x[:, obs_dim:] + v * (1.0 / n_steps)
+
+    print(prof.key_averages().table(
+        sort_by="cuda_time_total",
+        row_limit=10
+    ))
 
 
 if __name__ == "__main__":
@@ -201,3 +229,6 @@ if __name__ == "__main__":
 
     print("\nMeasuring baseline latency...")
     measure_baseline(model)
+
+    print("\nProfiling...")
+    profile_inference(model)
