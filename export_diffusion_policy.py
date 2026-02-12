@@ -80,7 +80,7 @@ class DiffusionPolicyNet(nn.Module):
   DiffusionPolicyBlock is one layer. Notice it does
   LayerNorm, then Linear, then adds the time
   embedding. Those three operations — norm, linear,
-  time injection — are exactly what our fused kernel
+  time injection are exactly what our fused kernel
   on Day 4 will collapse into a single GPU operation.
 
   n_layers=8 means 8 blocks. Each forward pass runs
@@ -183,6 +183,7 @@ def measure_baseline(model, obs_dim=20, action_dim=10, n_steps=50, n_runs=20):
     print(f"Min:{latencies.min():.2f} ms")
     print(f"Max:{latencies.max():.2f} ms")
     print(f"Target: <10ms for 100Hz robot control")
+    # first
     # we run 20 repetetions
     # we report mean, std, min, max
     # variance tells you whether GPU is thermal throttling or being interupted by other processes
