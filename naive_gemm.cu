@@ -25,16 +25,16 @@ __global__ void naive_gemm_kernel(const float *__restrict__ a,
    * only 8 cells. the guard tells the extra 8 workers to do nothign
    *
    * */
-  int row = blockidx.y * blockdim.y + threadidx.y;
-  int col = blockidx.x * blockdim.x + threadidx.x;
+  int row = blockIdx.y * blockDim.y + threadIdx.y;
+  int col = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (row >= m || col >= n) {
     return;
   }
 
   float acc = 0.0f;
-  for (int k = 0; k < k; k++) {
-    acc += a[row * k + k] * b[k * n + col];
+  for (int p = 0; p < k; p++) {
+    acc += a[row * k + p] * b[p * n + col];
   }
 
   c[row * n + col] = acc;
@@ -63,8 +63,8 @@ void cpu_gemm(const float *a, const float *b, float *c, int m, int k, int n) {
   for (int i = 0; i < m; i++) {
     for (int j = 0; j < n; j++) {
       float acc = 0.0f;
-      for (int k = 0; k < k; k++) {
-        acc += a[i * k + k] * b[k * n + j];
+      for (int p = 0; p < k; p++) {
+        acc += a[i * k + p] * b[p * n + j];
       }
       c[i * n + j] = acc;
     }
@@ -115,26 +115,26 @@ int main() {
   for (int i = 0; i < m * k; i++) {
     // produces a random float between 0.0 and 1.0
     // need float cast to keep as float
-    h_a[i] = (float)rand() / rand_max;
+    h_a[i] = (float)rand() / RAND_MAX;
   }
   for (int i = 0; i < k * n; i++) {
-    h_b[i] = (float)rand() / rand_max;
+    h_b[i] = (float)rand() / RAND_MAX;
   }
 
   float *d_a, *d_b, *d_c;
   // allocates bytes in gpu and vram.
   // & means adress of
-  // cudamalloc needs to write the gpu address of d_..
+  // cudaMalloc needs to write the gpu address of d_..
   // so we pass a pointer to the pointer and not the pointer itself
-  cudamalloc(&d_a, bytes_a);
-  cudamalloc(&d_b, bytes_b);
-  cudamalloc(&d_c, bytes_c);
+  cudaMalloc(&d_a, bytes_a);
+  cudaMalloc(&d_b, bytes_b);
+  cudaMalloc(&d_c, bytes_c);
 
   // copies data form cpu to gpu over the pcie bus
   // the direction flag is explicit
   // we only copy a and b, because the kernel will write c from scratch
-  cudamemcpy(d_a, h_a, bytes_a, cudamemcpyhosttodevice);
-  cudamemcpy(d_b, h_b, bytes_b, cudamemcpyhosttodevice);
+  cudaMemcpy(d_a, h_a, bytes_a, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_b, h_b, bytes_b, cudaMemcpyHostToDevice);
 
   // dim 3 is a cuda type for 3d dimensions. we only use x and y here since our
   // mateix is 2d block(16...) means each block contains 16x16=256 threada. each
@@ -155,10 +155,10 @@ int main() {
   launch on a gpu pays a one-time jit compilation cost. if you time that launch
   you get a misleading number. we throw it away.
 
-  cudadevicesynchronize() is critical. gpu kernel launches are asynchronous —
+  cudaDeviceSynchronize() is critical. gpu kernel launches are asynchronous —
   the cpu fires the launch and immediately moves on without waiting. if you
   start the timer, launch the kernel, and stop the timer without synchronizing,
-  you are measuring almost nothing. cudadevicesynchronize() blocks the cpu until
+  you are measuring almost nothing. cudaDeviceSynchronize() blocks the cpu until
   the gpu has actually finished.
 
   the gflop/s formula: a 1024×1024×1024 matrix multiply does 2 * m * k * n
@@ -167,14 +167,14 @@ int main() {
    * */
 
   naive_gemm_kernel<<<grid, block>>>(d_a, d_b, d_c, m, k, n);
-  cudadevicesynchronize();
+  cudaDeviceSynchronize();
 
   int reps = 10;
   auto t0 = std::chrono::high_resolution_clock::now();
   for (int r = 0; r < reps; r++) {
     naive_gemm_kernel<<<grid, block>>>(d_a, d_b, d_c, m, k, n);
   }
-  cudadevicesynchronize();
+  cudaDeviceSynchronize();
   auto t1 = std::chrono::high_resolution_clock::now();
 
   double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / reps;
@@ -184,12 +184,12 @@ int main() {
   printf("utilization: %.4f%%\n", gflops / 82500.0 * 100.0);
 
   /*
-     cudamemcpy with cudamemcpydevicetohost copies the gpu result back to cpu
-  memory so we can compare it against the cpu reference. every cudamalloc gets a
+     cudaMemcpy with cudaMemcpyDeviceToHost copies the gpu result back to cpu
+  memory so we can compare it against the cpu reference. every cudaMalloc gets a
   matching cudafree. every new gets a matching delete[]. standaerd practice
    *
    * */
-  cudamemcpy(h_c_gpu, d_c, bytes_c, cudamemcpydevicetohost);
+  cudaMemcpy(h_c_gpu, d_c, bytes_c, cudaMemcpyDeviceToHost);
   cpu_gemm(h_a, h_b, h_c_cpu, m, k, n);
   float err = max_abs_error(h_c_cpu, h_c_gpu, m * n);
   printf("max absolutte error: %.2e %s\n", err,
