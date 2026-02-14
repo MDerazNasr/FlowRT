@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstdlib>
 #include <cuda_runtime.h>
 #include <stdio.h>
 
@@ -68,4 +69,99 @@ __global__ void naive_euler_step(float *__restrict__ x, // trajectory state [D]
   // write x back to global memory (~600 cycle memory)
   // this data will be read back next launch immedidately
   x[i] = xi;
+}
+
+int main() {
+  // D is dimension of our trajectory state vector
+  // In diffusion policy this would be the action dimension
+  // we use 1024 to match yesterday GEMM and stress the memory system
+  int D = 1024;
+  int N_steps = 50;
+  float dt = 1.0f / N_steps;
+
+  // build timestep array on the CPU first
+  //  ts[i] = i * dt, evenly spaced fro, 0 to 1
+  float *h_ts = new float[N_steps];
+  for (int i = 0; i < N_steps; i++) {
+    h_ts[i] = i * dt;
+  }
+
+  // allocate x and timesteps on the GPU
+  float *d_x, *d_ts;
+  cudaMalloc(&d_x, D * sizeof(float));
+  cudaMalloc(&d_ts, N_steps * sizeof(float));
+
+  // copy timesteps to GPU, these never change across runs
+  cudaMemcpyHostToDevice(d_ts, h_ts, N_steps * sizeof(float),
+                         cudaMemcpyHostToDevice);
+
+  // initialise x with random values on CPU, then copy to GPU
+  float *h_x = new float[D];
+  for (int i = 0; i < D; i++) {
+    h_x[i] = (float)rand() / RAND_MAX;
+  }
+
+  cudaMemcpy(d_x, h_x, D * sizeof(float) * cudaMemcpyHostToDevice);
+
+  // launch config; 1D grid since x is a 1D vector
+  // note - using 1D grid this time (not 2d like GEMM)
+  // trajectory state x is a vector, not a matrix.
+  // One thread per element, threads arranged in a line
+  int BLOCK = 256;
+  int GRID = (D + BLOCK - 1) / BLOCK;
+
+  // timing both kernels
+  int REPS = 100;
+
+  // Naive: 50 separate kernel launches per run
+  // Reset x to the same initial state before timing
+  cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
+
+  // warm up
+  for (int s = 0; s < N_steps; s++) {
+    naive_euler_step<<<GRID, BLOCK>>>(d_x, h_ts[s], dt, D);
+  }
+  cudaMemcpyHostToDevice();
+
+  // reset x again before timed run
+  cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
+
+  auto t0 = std::chrono::high_resolution_clock::now();
+  for (int r = 0; r < REPS; r++) {
+    for (int s = 0; s < N_steps; s++) {
+      naive_euler_step<<<GRID, BLOCK>>>(d_x, h_ts[s], dt, D);
+    }
+  }
+  cudaDeviceSynchronize();
+  auto t1 = std::chrono::high_resolution_clock::now();
+  double naive_ms =
+      std::chrono::duration<double, std::milli>(t1 - t0).count() / REPS;
+
+  // PERSISTENT: 1 kernel launch per run
+  cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
+
+  // warm up
+  persistent_euler_kernel<<<GRID, BLOCK>>>(d_x, d_ts, dt, D, N_steps);
+  cudaDeviceSynchronize();
+
+  // resent x again before timed run
+  cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
+
+  auto t2 = std::chrono::high_resolution_clock::now();
+  for (int r = 0; r < REPS; r++) {
+    persistent_euler_kernel<<<GRID, BLOCK>>>(d_x, d_ts, dt, D, N_steps);
+  }
+
+  cudaDeviceSynchronize();
+  auto t3 = std::chrono::high_resolution_clock::now();
+  double persistent_ms =
+      std::chrono::duration<double, std::milli>(t3 - t2).count() / REPS;
+
+  // we reset x to the same initial state before each timed run
+  // imp - both kernels must start from identical inputs so the comparision
+  // is fair and the correctness check at the end is meaningful
+  // we use 100 reopetitions instead of 10 because these kernels are very fast
+  // on a vector of size 1024. More reps gives a more stable average
+  //
+  //
 }
