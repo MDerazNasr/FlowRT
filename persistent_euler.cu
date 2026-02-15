@@ -71,6 +71,41 @@ __global__ void naive_euler_step(float *__restrict__ x, // trajectory state [D]
   x[i] = xi;
 }
 
+// ONE kernel launch handles ALL N steps internally.
+// x is read from global memory exactly once at the start.
+// x is written to global memory exactly once at the end.
+// Between those two points, x lives in a register —
+// the fastest memory on the GPU, ~1 cycle latency,
+// private to each thread.
+// This eliminates N-1 global memory round trips entirely.
+__global__ void persistent_euler_kernel(
+    float* __restrict__ x,        // trajectory state [D]
+    const float* __restrict__ ts, // all timesteps [N_steps]
+    float dt,                     // step size
+    int D,                        // dimension of x
+    int N_steps                   // number of steps
+) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= D) return;
+
+  // READ ONCE from global memory into a register.
+  // From this point on, xi lives in a register.
+  // No other thread can touch xi. No global memory needed.
+  float xi = x[i];
+
+  // ALL N steps happen here inside one kernel launch.
+  // xi stays in a register the entire time.
+  for (int step = 0; step < N_steps; step++) {
+    float t = ts[step];
+    float v = toy_velocity(xi, t);
+    xi = xi + v * dt;
+  }
+
+  // WRITE ONCE to global memory.
+  // This is the only time we touch slow memory.
+  x[i] = xi;
+}
+
 int main() {
   // D is dimension of our trajectory state vector
   // In diffusion policy this would be the action dimension
@@ -92,8 +127,7 @@ int main() {
   cudaMalloc(&d_ts, N_steps * sizeof(float));
 
   // copy timesteps to GPU, these never change across runs
-  cudaMemcpyHostToDevice(d_ts, h_ts, N_steps * sizeof(float),
-                         cudaMemcpyHostToDevice);
+  cudaMemcpy(d_ts, h_ts, N_steps * sizeof(float), cudaMemcpyHostToDevice);
 
   // initialise x with random values on CPU, then copy to GPU
   float *h_x = new float[D];
@@ -101,7 +135,7 @@ int main() {
     h_x[i] = (float)rand() / RAND_MAX;
   }
 
-  cudaMemcpy(d_x, h_x, D * sizeof(float) * cudaMemcpyHostToDevice);
+  cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
 
   // launch config; 1D grid since x is a 1D vector
   // note - using 1D grid this time (not 2d like GEMM)
@@ -121,7 +155,7 @@ int main() {
   for (int s = 0; s < N_steps; s++) {
     naive_euler_step<<<GRID, BLOCK>>>(d_x, h_ts[s], dt, D);
   }
-  cudaMemcpyHostToDevice();
+  cudaDeviceSynchronize();
 
   // reset x again before timed run
   cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
@@ -163,5 +197,44 @@ int main() {
   // we use 100 reopetitions instead of 10 because these kernels are very fast
   // on a vector of size 1024. More reps gives a more stable average
   //
-  //
+  // RESULTS
+  printf("Naive    (50 separate launches): %.4f ms\n", naive_ms);
+  printf("Persistent (1 launch, 50 steps): %.4f ms\n", persistent_ms);
+  printf("Speedup: %.2fx\n", naive_ms / persistent_ms);
+
+  // CORRECTNESS CHECK
+  //  Run both kernels from the same starting x on CPU
+  //  and compare final results. Max error must be below 1e-4.
+  float *h_naive = new float[D];
+  float *h_persistent = new float[D];
+
+  // naive result
+  cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
+  for (int s = 0; s < N_steps; s++) {
+    naive_euler_step<<<GRID, BLOCK>>>(d_x, h_ts[s], dt, D);
+  }
+  cudaDeviceSynchronize();
+  cudaMemcpy(h_naive, d_x, D * sizeof(float), cudaMemcpyDeviceToHost);
+
+  // persistent result
+  cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
+  persistent_euler_kernel<<<GRID, BLOCK>>>(d_x, d_ts, dt, D, N_steps);
+  cudaDeviceSynchronize();
+  cudaMemcpy(h_persistent, d_x, D * sizeof(float), cudaMemcpyDeviceToHost);
+
+  float max_err = 0.0f;
+  for (int i = 0; i < D; i++) {
+    max_err = fmaxf(max_err, fabsf(h_naive[i] - h_persistent[i]));
+  }
+  printf("Max absolute error: %.2e  %s\n", max_err,
+         max_err < 1e-4f ? "[PASS]" : "[FAIL]");
+
+  // CLEANUP
+  cudaFree(d_x);
+  cudaFree(d_ts);
+  delete[] h_x;
+  delete[] h_ts;
+  delete[] h_naive;
+  delete[] h_persistent;
+  return 0;
 }
