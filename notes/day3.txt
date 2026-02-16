@@ -1,0 +1,7 @@
+Section 1 — The Toy Velocity Function
+
+  This is a device function — it runs on the GPU but cannot be
+  called directly from the CPU. It is called from inside the
+  kernel. For now it is a simple scaled version of x — not a real
+  transformer, just enough to produce a meaningful
+  ⎿  Interrupted · What should Claude do instead?

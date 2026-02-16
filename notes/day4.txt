@@ -1,0 +1,168 @@
+Section 4 - Roadmap Position
+
+  ---
+  Day 4 — Roadmap Position
+
+  Milestone 1, Step 4. On Day 2 the profiler told us the second
+  biggest bottleneck was layer_norm — 400 separate kernel
+  launches, one per block per step. Right after each LayerNorm,
+  the code immediately calls a Linear layer, then immediately adds
+   the time embedding. Three separate operations. Three separate
+  kernel launches. Three global memory round trips between them.
+
+  Today we collapse all three into a single kernel. One launch.
+  The data flows from LayerNorm straight into the Linear straight
+  into the time addition — never touching global memory in
+  between. This is called kernel fusion.
+
+  ---
+  1. The Concept in Plain Language — What Are We Fusing?
+
+  Let me tell you the story of what happens inside one
+  DiffusionPolicyBlock on Day 2's model.
+
+  You have a vector x — the current state flowing through the
+  network. The block does three things to it:
+
+  Step 1 — LayerNorm. This normalizes x so its values have mean 0
+  and standard deviation 1. It prevents the numbers from getting
+  too large or too small as they travel through many layers. Think
+   of it as a reset button that keeps the numbers well-behaved.
+
+  Step 2 — Linear. This multiplies the normalized x by a weight
+  matrix W and adds a bias b. This is the GEMM you wrote on Day 1.
+   It is the main computation of the layer — transforming the data
+   into a new representation.
+
+  Step 3 — Time injection. This adds the time embedding vector
+  t_emb to the result. This is how the model knows what timestep
+  it is at. Without this, every step of the denoising loop would
+  look identical to the model.
+
+  In standard PyTorch, each of these is a separate GPU operation:
+
+  LayerNorm(x)   → write result to global memory
+  Linear(result) → read from global memory, write result to global
+   memory
+  result + t_emb → read from global memory, write result to global
+   memory
+
+  Three writes. Three reads. Five global memory crossings total.
+
+  In our fused kernel, the story goes differently:
+
+  LayerNorm(x)   → result stays in registers
+  Linear(result) → reads from registers, result stays in registers
+  result + t_emb → reads from registers, writes ONCE to global
+  memory
+
+  One write. The data never leaves fast memory until it is
+  completely done.
+
+  ---
+  2. The ML Theory Connection
+
+  Why does LayerNorm exist?
+
+  When you stack many layers in a neural network, the numbers can
+  drift. Layer 1 produces values around 0.5. Layer 2 amplifies
+  them to 5.0. Layer 3 to 50.0. By layer 8 the numbers are
+  astronomical and gradients explode during training. LayerNorm
+  prevents this by forcing the output of every layer to have mean
+  0 and std 1 before passing to the next layer.
+
+  The formula is:
+
+  LayerNorm(x) = (x - mean(x)) / sqrt(var(x) + ε)  *  γ  +  β
+
+  Where γ and β are learned scale and shift parameters. ε is a
+  tiny number (like 1e-5) added to prevent division by zero.
+
+  Why does time injection matter so much?
+
+  The model runs the same weights 50 times — once per denoising
+  step. Without time injection, the model has no way to know if it
+   is at step 1 (all noise, needs big corrections) or step 49
+  (nearly done, needs tiny corrections). The time embedding is
+  what gives the model its "clock." Every block gets told what
+  time it is, and adjusts its behavior accordingly.
+
+  This is also exactly why the activations look different at t=0
+  vs t=1 — the time embedding is different, so everything
+  downstream of it is different. That is the core motivation for
+  time-conditioned quantization in Milestone 2.
+
+  ---
+  3. The FlowRT Connection
+
+  On Day 2 your profiler showed:
+
+  aten::native_layer_norm  →  862ms CUDA time  →  400 calls
+  aten::addmm              →  2.004ms          →  1000 calls
+  aten::add                →  464ms            →  450 calls
+
+  Those three operations happen back to back inside every block.
+  They are always called together. Fusing them means we replace 3
+  kernel launches with 1, and eliminate 4 global memory round
+  trips per block execution.
+
+  With 8 blocks × 50 steps = 400 block executions per inference
+  call, that is 1600 eliminated global memory round trips per
+  inference call.
+
+
+Imagine your GPU is a **chef** in a kitchen, and "Global Memory" is a **pantry** down the hallway. 
+
+Currently, to make a single dish (a "Block"), the chef is doing this:
+
+1.  **Step 1:** Run to the pantry, get ingredients, bring them back, salt them (**LayerNorm**), then run back to the pantry to put the salted food away.
+2.  **Step 2:** Run back to the pantry, get the salted food, bring it back, chop it (**Linear**), then run back to the pantry to put the chopped food away.
+3.  **Step 3:** Run back to the pantry, get the chopped food, bring it back, add a secret sauce (**Time Injection**), then run back to the pantry to put the finished dish away.
+
+That is **six trips** to the hallway for one tiny meal! The chef is spending more time walking than actually cooking.
+
+---
+
+## What is Kernel Fusion?
+**Kernel Fusion** is telling the chef: *"Stop running back and forth! Just keep the food on the counter until you are totally finished."*
+
+* The chef grabs the ingredients once.
+* They salt it, chop it, and add the sauce all at once on the cutting board (**Registers/Fast Memory**).
+* They only walk back to the pantry **once** to deliver the final product.
+
+
+
+---
+
+## The Three Ingredients
+Here is what the chef is actually doing to the data:
+
+| Step | Formal Name | The "Dummy" Explanation |
+| :--- | :--- | :--- |
+| **1** | **LayerNorm** | **The Volume Knob:** It makes sure the numbers aren't too loud or too quiet. It keeps everything at a "medium" volume so the computer doesn't get confused. |
+| **2** | **Linear** | **The Brains:** This is where the actual thinking happens. It changes the data into something useful using math "weights." |
+| **3** | **Time Injection** | **The Alarm Clock:** This tells the model what time it is. If the model is cleaning up a messy picture, it needs to know if it just started (big mess) or is almost finished (small mess). |
+
+---
+
+## Why This Matters
+In your specific model, you were doing those three steps **400 times** for every single image or action. 
+
+By "fusing" them, you didn't change the math, but you deleted **1,600 unnecessary trips** to the pantry. This makes the whole process much faster because the "chef" (the GPU) stays at the counter and actually cooks instead of walking in the hallway.
+
+
+ so basically, in this step, what we're going to do is fuse those three tools together. In terms of the analogy, the chef is getting all the ingredients and tools at once. Whereas here, the kernels are rather than having three separate kernels that are doing three separate jobs, we're creating one fused kernel that's doing all three things in one trip. 
+
+⏺ Section 1 — The LayerNorm Helper
+
+  Here is the story of what this function does before you type a single line.
+
+  Imagine you have a vector x with 256 numbers flowing through a neural network layer. Some
+  of those numbers might be 100.0, some might be 0.001. That kind of spread makes training
+  unstable and inference unpredictable. LayerNorm fixes this by asking two questions: what
+  is the average value in this vector, and how spread out are the values? Then it uses those
+   two answers to rescale every number so the whole vector has mean 0 and standard deviation
+   1.
+
+  It then applies two learned parameters — gamma (scale) and beta (shift) — so the model can
+   learn to undo the normalization if needed.
