@@ -3,16 +3,13 @@
 #include <math.h>
 #include <chrono>
 
-// ─────────────────────────────────────────────────────────────────────────────
 // SECTION 1: LayerNorm helper
-//
 // __device__ = runs on GPU, called from inside a kernel only.
 //
 // Normalizes a vector x of length D to have mean=0, std=1,
 // then applies learned scale (gamma) and shift (beta).
 //
 // Formula: out[i] = gamma[i] * ((x[i] - mean) / sqrt(var + 1e-5)) + beta[i]
-// ─────────────────────────────────────────────────────────────────────────────
 __device__ void layernorm(
     const float* __restrict__ x,
     const float* __restrict__ gamma,
@@ -40,13 +37,12 @@ __device__ void layernorm(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // SECTION 2: The fused kernel
 //
 // This single kernel replaces three separate PyTorch operations:
 //   1. LayerNorm(x)
-//   2. Linear(result)    →  W * result + b
-//   3. result + t_emb    →  time injection
+//   2. Linear(result )-  W * result + b
+//   3. result + t_emb -  time injection
 //
 // In standard inference each of those is a separate kernel launch with
 // global memory round trips between them.
@@ -54,7 +50,6 @@ __device__ void layernorm(
 // memory — global memory is touched exactly once at the end.
 //
 // Each thread block handles ONE row (one sample in the batch).
-// ─────────────────────────────────────────────────────────────────────────────
 __global__ void fused_ln_linear_time_kernel(
     const float* __restrict__ x,       // input [B, D]
     const float* __restrict__ gamma,   // layernorm scale [D]
@@ -77,7 +72,7 @@ __global__ void fused_ln_linear_time_kernel(
     const float* x_row   = x   + row * D;
     float*       out_row  = out + row * D_out;
 
-    // ── Step 1: LayerNorm ─────────────────────────────────────────────────────
+    // Step 1: LayerNorm 
     // Normalize x_row and store result in shared memory x_norm.
     // Only thread 0 does this — LayerNorm needs all elements to compute mean/var.
     // All other threads wait at the __syncthreads() barrier below.
@@ -89,7 +84,7 @@ __global__ void fused_ln_linear_time_kernel(
     // before any thread reads from it in the linear step below
     __syncthreads();
 
-    // ── Step 2 + 3: Linear + time injection ──────────────────────────────────
+    // ── Step 2 + 3: Linear + time injection 
     // Each thread computes one output element.
     // out[j] = dot(W[j], x_norm) + b[j] + t_emb[j]
     //
@@ -107,12 +102,10 @@ __global__ void fused_ln_linear_time_kernel(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // SECTION 3: CPU reference
 //
 // Runs the same three operations sequentially on the CPU.
 // Used to verify the GPU result is numerically correct (tolerance 1e-4).
-// ─────────────────────────────────────────────────────────────────────────────
 void cpu_fused_ln_linear_time(
     const float* x,
     const float* gamma,
@@ -120,12 +113,12 @@ void cpu_fused_ln_linear_time(
     const float* W,
     const float* b,
     const float* t_emb,
-    float*       out,
+    float* out,
     int B, int D, int D_out
 ) {
     for (int row = 0; row < B; row++) {
         const float* x_row  = x   + row * D;
-        float*       o_row  = out + row * D_out;
+        float* o_row  = out + row * D_out;
 
         // LayerNorm
         float mean = 0.0f;
@@ -156,44 +149,42 @@ void cpu_fused_ln_linear_time(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // SECTION 4: main()
-// ─────────────────────────────────────────────────────────────────────────────
 int main() {
     // dimensions matching our DiffusionPolicyBlock from Day 2
     int B     = 1;    // batch size
     int D     = 256;  // input/hidden dimension
     int D_out = 256;  // output dimension
 
-    // ── allocate and initialize host arrays ───────────────────────────────────
-    float* h_x     = new float[B * D];
+    // ── allocate and initialize host arrays 
+    float* h_x = new float[B * D];
     float* h_gamma = new float[D];
     float* h_beta  = new float[D];
-    float* h_W     = new float[D_out * D];
-    float* h_b     = new float[D_out];
+    float* h_W = new float[D_out * D];
+    float* h_b = new float[D_out];
     float* h_temb  = new float[D_out];
     float* h_out_gpu = new float[B * D_out];
     float* h_out_cpu = new float[B * D_out];
 
     // fill with random values
-    for (int i = 0; i < B * D;     i++) h_x[i]     = (float)rand()/RAND_MAX - 0.5f;
-    for (int i = 0; i < D;         i++) h_gamma[i]  = 1.0f;  // standard init
-    for (int i = 0; i < D;         i++) h_beta[i]   = 0.0f;  // standard init
+    for (int i = 0; i < B * D; i++) h_x[i]     = (float)rand()/RAND_MAX - 0.5f;
+    for (int i = 0; i < D; i++) h_gamma[i]  = 1.0f;  // standard init
+    for (int i = 0; i < D; i++) h_beta[i]   = 0.0f;  // standard init
     for (int i = 0; i < D_out * D; i++) h_W[i]      = ((float)rand()/RAND_MAX - 0.5f) * 0.02f;
-    for (int i = 0; i < D_out;     i++) h_b[i]      = 0.0f;
-    for (int i = 0; i < D_out;     i++) h_temb[i]   = (float)rand()/RAND_MAX * 0.1f;
+    for (int i = 0; i < D_out; i++) h_b[i]      = 0.0f;
+    for (int i = 0; i < D_out; i++) h_temb[i]   = (float)rand()/RAND_MAX * 0.1f;
 
-    // ── allocate device arrays ────────────────────────────────────────────────
+    // ── allocate device arrays 
     float *d_x, *d_gamma, *d_beta, *d_W, *d_b, *d_temb, *d_out;
-    cudaMalloc(&d_x,     B * D     * sizeof(float));
-    cudaMalloc(&d_gamma, D         * sizeof(float));
-    cudaMalloc(&d_beta,  D         * sizeof(float));
-    cudaMalloc(&d_W,     D_out * D * sizeof(float));
-    cudaMalloc(&d_b,     D_out     * sizeof(float));
-    cudaMalloc(&d_temb,  D_out     * sizeof(float));
-    cudaMalloc(&d_out,   B * D_out * sizeof(float));
+    cudaMalloc(&d_x, B * D * sizeof(float));
+    cudaMalloc(&d_gamma, D * sizeof(float));
+    cudaMalloc(&d_beta, D * sizeof(float));
+    cudaMalloc(&d_W, D_out * D * sizeof(float));
+    cudaMalloc(&d_b, D_out * sizeof(float));
+    cudaMalloc(&d_temb, D_out * sizeof(float));
+    cudaMalloc(&d_out,B * D_out * sizeof(float));
 
-    // ── copy host → device ────────────────────────────────────────────────────
+    // ── copy host → device 
     cudaMemcpy(d_x,     h_x,     B * D     * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_gamma, h_gamma, D         * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_beta,  h_beta,  D         * sizeof(float), cudaMemcpyHostToDevice);
@@ -201,7 +192,7 @@ int main() {
     cudaMemcpy(d_b,     h_b,     D_out     * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_temb,  h_temb,  D_out     * sizeof(float), cudaMemcpyHostToDevice);
 
-    // ── launch config ─────────────────────────────────────────────────────────
+    // ── launch config 
     // one block per batch row, 256 threads per block
     // shared memory = D floats for the layernorm output
     dim3 grid(B);
@@ -213,7 +204,7 @@ int main() {
         d_x, d_gamma, d_beta, d_W, d_b, d_temb, d_out, D, D_out);
     cudaDeviceSynchronize();
 
-    // ── timed run ─────────────────────────────────────────────────────────────
+    // ── timed run 
     int REPS = 1000;
     auto t0 = std::chrono::high_resolution_clock::now();
     for (int r = 0; r < REPS; r++) {
@@ -226,7 +217,7 @@ int main() {
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / REPS;
     printf("Fused LN+Linear+Time kernel: %.4f ms\n", ms);
 
-    // ── correctness check ─────────────────────────────────────────────────────
+    // ── correctness check 
     cudaMemcpy(h_out_gpu, d_out, B * D_out * sizeof(float), cudaMemcpyDeviceToHost);
     cpu_fused_ln_linear_time(h_x, h_gamma, h_beta, h_W, h_b, h_temb,
                              h_out_cpu, B, D, D_out);
@@ -237,7 +228,7 @@ int main() {
     printf("Max absolute error vs CPU: %.2e  %s\n",
            max_err, max_err < 1e-3f ? "[PASS]" : "[FAIL]");
 
-    // ── cleanup ───────────────────────────────────────────────────────────────
+    // ── cleanup 
     cudaFree(d_x); cudaFree(d_gamma); cudaFree(d_beta);
     cudaFree(d_W); cudaFree(d_b); cudaFree(d_temb); cudaFree(d_out);
     delete[] h_x; delete[] h_gamma; delete[] h_beta;
