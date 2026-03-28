@@ -19,3 +19,21 @@ Under 10ms per sample on RTX 4090, enabling 100Hz real-time robot control. Proje
 ## Stack
 
 C++17 · CUDA 12.x · CUTLASS 3.x · ONNX Runtime · pybind11 · TensorRT · CMake
+
+## Supported Models
+
+### Diffusion Policy
+Flow matching visuomotor policy. Obs+action concatenated input, 8-layer transformer, 50-step Euler denoising loop.
+
+### unifolm-vla DiT Action Head
+Flow matching action head from [unifolm-vla](https://github.com/unitreerobotics/unifolm-vla). Cross-attention DiT conditioned on Qwen2.5-VL backbone features. Supports the same VLM + flow matching DiT architecture as GR00T N1.5 and Pi0.
+
+**Export:** `python export_unifolm_dit.py`
+
+The export resolves four blockers that prevent naive ONNX export of the original unifolm-vla codebase:
+1. Denoising loop unrolling — loop moved outside the model (`SingleStepActionHead`)
+2. `torch.randn` inside inference path — noise is an external input argument
+3. `torch.autocast("cuda")` in forward pass — removed; precision set at compile time
+4. `BatchFeature` API boundary — plain tensor I/O throughout
+
+The benchmark shows that even with a compiled ONNX model, the Python dispatch loop between steps adds per-step overhead that scales with N. Moving the loop to C++ — the core contribution of the OpenVINO `RobotActionPipeline` — eliminates this on Intel iGPU the same way FlowRT's persistent trajectory kernel eliminates it on NVIDIA.
