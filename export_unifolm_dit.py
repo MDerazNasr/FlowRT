@@ -1,6 +1,5 @@
 """
 export_unifolm_dit.py
----------------------
 Export the unifolm-vla DiT action head to ONNX and measure baseline latency.
 
 Mirrors export_diffusion_policy.py in structure.
@@ -22,7 +21,7 @@ import torch
 
 from models.unifolm_vla import SingleStepActionHead
 
-# --- Model config matching unifolm-vla DiT-L / Unitree G1 ---
+# Model config matching unifolm-vla DiT-L / Unitree G1 
 STATE_DIM = 14              # Unitree G1 proprioception (14 DoF)
 ACTION_DIM = 14             # 14-DoF joint actions
 ACTION_HORIZON = 16         # Action chunk length
