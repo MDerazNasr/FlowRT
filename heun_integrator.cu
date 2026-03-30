@@ -3,25 +3,21 @@
 #include <math.h>
 #include <chrono>
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION 1: Toy velocity function
-//
+// Toy velocity function
 // Stand-in for the full transformer model.
 // v(x, t) = -x * (1 - t)
 // High velocity early (t≈0), near-zero late (t≈1).
 // Same memory behavior as the real model.
-// ─────────────────────────────────────────────────────────────────────────────
 __device__ float toy_velocity(float x, float t) {
     return -x * (1.0f - t);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION 2: Naive Euler kernel (baseline)
+
+// Naive Euler kernel (baseline)
 //
 // First-order integrator. One function evaluation per step.
 // Error per step: O(dt^2). Total error over trajectory: O(dt).
 // Launched N times from CPU — each launch pays global memory round trip.
-// ─────────────────────────────────────────────────────────────────────────────
 __global__ void naive_euler_kernel(
     float* __restrict__ x,        // trajectory state [D]
     const float* __restrict__ ts, // all timesteps [N_steps]
@@ -41,8 +37,7 @@ __global__ void naive_euler_kernel(
     x[i] = xi;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION 3: Persistent Heun kernel
+// Persistent Heun kernel
 //
 // Second-order integrator (predictor-corrector).
 // Two function evaluations per step — but error per step: O(dt^3).
@@ -57,7 +52,6 @@ __global__ void naive_euler_kernel(
 //
 // One kernel launch handles all N steps.
 // x_t stays in registers throughout — no global memory between steps.
-// ─────────────────────────────────────────────────────────────────────────────
 __global__ void persistent_heun_kernel(
     float* __restrict__ x,        // trajectory state [D]
     const float* __restrict__ ts, // all timesteps [N_steps]
@@ -91,12 +85,11 @@ __global__ void persistent_heun_kernel(
     x[i] = xi;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION 4: CPU reference
+
+// CPU reference
 //
-// Same Heun algorithm on CPU.
+// Same Heun algorithm on CPU
 // Used to verify GPU result is correct within tolerance 1e-4.
-// ─────────────────────────────────────────────────────────────────────────────
 void cpu_heun(
     const float* x_init,
     float*       x_out,
@@ -145,9 +138,6 @@ float max_abs_error(const float* a, const float* b, int n) {
     return err;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION 5: main()
-// ─────────────────────────────────────────────────────────────────────────────
 int main() {
     int D       = 1024;
     int N_steps = 50;
@@ -171,7 +161,7 @@ int main() {
     int GRID  = (D + BLOCK - 1) / BLOCK;
     int REPS  = 100;
 
-    // ── Euler timing ──────────────────────────────────────────────────────────
+    // Euler timing 
     cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
     naive_euler_kernel<<<GRID, BLOCK>>>(d_x, d_ts, dt, D, N_steps);
     cudaDeviceSynchronize();
@@ -185,7 +175,7 @@ int main() {
     auto t1 = std::chrono::high_resolution_clock::now();
     double euler_ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / REPS;
 
-    // ── Heun timing ───────────────────────────────────────────────────────────
+    // Heun timing 
     cudaMemcpy(d_x, h_x, D * sizeof(float), cudaMemcpyHostToDevice);
     persistent_heun_kernel<<<GRID, BLOCK>>>(d_x, d_ts, dt, D, N_steps);
     cudaDeviceSynchronize();
@@ -204,7 +194,7 @@ int main() {
     printf("Heun overhead vs Euler: %.2fx  (expected ~2x — two velocity evals per step)\n",
            heun_ms / euler_ms);
 
-    // ── correctness: GPU Heun vs CPU Heun ────────────────────────────────────
+    // correctness: GPU Heun vs CPU Heun 
     float* h_heun_gpu = new float[D];
     float* h_heun_cpu = new float[D];
 
@@ -218,7 +208,7 @@ int main() {
     float err = max_abs_error(h_heun_gpu, h_heun_cpu, D);
     printf("GPU vs CPU Heun error: %.2e  %s\n", err, err < 1e-3f ? "[PASS]" : "[FAIL]");
 
-    // ── accuracy: Euler vs Heun vs ground truth ───────────────────────────────
+    // accuracy: Euler vs Heun vs ground truth 
     // Run both with 10 steps (coarse) and compare to 1000-step reference
     int N_coarse = 10;
     float dt_coarse = 1.0f / N_coarse;
@@ -231,7 +221,7 @@ int main() {
 
     float* h_euler_coarse = new float[D];
     float* h_heun_coarse  = new float[D];
-    float* h_ref          = new float[D];
+    float* h_ref = new float[D];
 
     cpu_euler(h_x, h_euler_coarse, h_ts_coarse, dt_coarse, D, N_coarse);
     cpu_heun (h_x, h_heun_coarse,  h_ts_coarse, dt_coarse, D, N_coarse);
@@ -246,7 +236,7 @@ int main() {
     printf("  Heun is %.1fx more accurate than Euler at same NFE\n",
            euler_err / heun_err);
 
-    // ── cleanup ───────────────────────────────────────────────────────────────
+    // cleanup 
     cudaFree(d_x); cudaFree(d_ts);
     delete[] h_x; delete[] h_ts; delete[] h_heun_gpu; delete[] h_heun_cpu;
     delete[] h_ts_coarse; delete[] h_ts_fine;
